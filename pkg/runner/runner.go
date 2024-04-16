@@ -250,7 +250,6 @@ func (p *Process) runTaskOnHost(ctx context.Context, tsk *config.Task, hostAddr,
 			tskVars[k] = v
 		}
 	}
-
 	if p.anyRemoteCommand(&activeTask) {
 		report(hostAddr, hostName, "completed task %q, commands: %d (%v)\n", activeTask.Name, count, since(stTask))
 	} else {

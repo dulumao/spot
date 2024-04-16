@@ -25,6 +25,7 @@ import (
 // PlayBook defines the top-level config object
 type PlayBook struct {
 	User       string            `yaml:"user" toml:"user"`               // ssh user
+	SSHPwd     string            `yaml:"ssh_pwd" toml:"ssh_pwd"`         // ssh pwd
 	SSHKey     string            `yaml:"ssh_key" toml:"ssh_key"`         // ssh key
 	SSHShell   string            `yaml:"ssh_shell" toml:"ssh_shell"`     // ssh shell to use
 	LocalShell string            `yaml:"local_shell" toml:"local_shell"` // local shell to use
@@ -47,6 +48,7 @@ type SecretsProvider interface {
 // It is used for unmarshalling only, and result used to make the usual PlayBook
 type SimplePlayBook struct {
 	User       string     `yaml:"user" toml:"user"`                 // ssh user
+	SSHPwd     string     `yaml:"ssh_pwd" toml:"ssh_pwd"`           // ssh pwd
 	SSHKey     string     `yaml:"ssh_key" toml:"ssh_key"`           // ssh key
 	SSHShell   string     `yaml:"ssh_shell" toml:"ssh_shell"`       // ssh shell to uses
 	LocalShell string     `yaml:"local_shell" toml:"local_shell"`   // local shell to use

@@ -44,6 +44,7 @@ type options struct {
 	// overrides
 	Inventory string            `short:"i" long:"inventory" description:"inventory file or url [$SPOT_INVENTORY]"`
 	SSHUser   string            `short:"u" long:"user" description:"ssh user"`
+	SSHPwd    string            `long:"pwd" description:"ssh pwd"`
 	SSHKey    string            `short:"k" long:"key" description:"ssh key"`
 	Env       map[string]string `short:"e" long:"env" description:"environment variables for all commands"`
 	EnvFile   string            `short:"E" long:"env-file" env:"SPOT_ENV_FILE" description:"environment variables from file" default:"env.yml"`
@@ -324,16 +325,53 @@ func makePlaybook(opts options, inventory string) (*config.PlayBook, error) {
 	return pbook, nil
 }
 
-func makeRunner(opts options, pbook *config.PlayBook) (*runner.Process, error) {
-	sshKey, err := sshKey(opts.SSHAgent, opts.SSHKey, pbook)
-	if err != nil {
-		return nil, fmt.Errorf("can't get ssh key: %w", err)
+func sshPwd(sshPwd string, pbook *config.PlayBook) string {
+	if sshPwd == "" && (pbook == nil || pbook.SSHPwd != "") { // no key provided in cli
+		sshPwd = pbook.SSHPwd // use playbook's ssh_pwd
 	}
+
+	return sshPwd
+}
+
+func sshKey(sshPwd string, pbook *config.PlayBook) string {
+	if sshPwd == "" && (pbook == nil || pbook.SSHKey != "") { // no key provided in cli
+		sshPwd = pbook.SSHKey // use playbook's ssh_key
+	}
+
+	return sshPwd
+}
+
+func makeRunner(opts options, pbook *config.PlayBook) (*runner.Process, error) {
+	sshKey := sshKey(opts.SSHKey, pbook)
+	sshPwd := sshPwd(opts.SSHPwd, pbook)
+
+	if sshKey == "" {
+		if sshPwd == "" {
+			u, err := userProvider.Current()
+			if err != nil {
+				return nil, fmt.Errorf("can't get current user: %w", err)
+			}
+			if !opts.SSHAgent {
+				sshKey = filepath.Join(u.HomeDir, ".ssh", "id_rsa")
+			}
+		}
+	}
+
+	if sshKey != "" {
+		if p, err := expandPath(sshKey); err == nil {
+			sshKey = p
+			sshPwd = ""
+		}
+
+		log.Printf("[INFO] ssh key: %s", sshKey)
+	}
+
 	logs := executor.MakeLogs(len(opts.Verbose) > 0, opts.NoColor, pbook.AllSecretValues())
-	connector, err := executor.NewConnector(sshKey, opts.SSHTimeout, logs)
+	connector, err := executor.NewConnector(sshKey, sshPwd, opts.SSHTimeout, logs)
 	if err != nil {
 		return nil, fmt.Errorf("can't create connector: %w", err)
 	}
+
 	if opts.SSHAgent {
 		connector = connector.WithAgent()
 	}
@@ -395,28 +433,37 @@ func targetsForTask(targets []string, taskName string, pbook runner.Playbook) []
 	return tsk.Targets
 }
 
-// get ssh key from cli or playbook. if no key is provided, use default ~/.ssh/id_rsa
-func sshKey(sshAgent bool, sshKey string, pbook *config.PlayBook) (key string, err error) {
-	if sshKey == "" && (pbook == nil || pbook.SSHKey != "") { // no key provided in cli
-		sshKey = pbook.SSHKey // use playbook's ssh_key
-	}
-	if p, err := expandPath(sshKey); err == nil {
-		sshKey = p
-	}
-
-	if sshKey == "" { // no key provided in cli or playbook
-		u, err := userProvider.Current()
-		if err != nil {
-			return "", fmt.Errorf("can't get current user: %w", err)
-		}
-		if !sshAgent {
-			sshKey = filepath.Join(u.HomeDir, ".ssh", "id_rsa")
-		}
-	}
-
-	log.Printf("[INFO] ssh key: %s", sshKey)
-	return sshKey, nil
-}
+//// get ssh pwd from cli or playbook.
+//func sshPwd(sshPwd string, pbook *config.PlayBook) string {
+//	if sshPwd == "" && (pbook == nil || pbook.SSHPwd != "") { // no pwd provided in cli
+//		return pbook.SSHPwd // use playbook's ssh_pwd
+//	}
+//
+//	return sshPwd
+//}
+//
+//// get ssh key from cli or playbook. if no key is provided, use default ~/.ssh/id_rsa
+//func sshKey(sshAgent bool, sshKey string, pbook *config.PlayBook) (key string, err error) {
+//	if sshKey == "" && (pbook == nil || pbook.SSHKey != "") { // no key provided in cli
+//		sshKey = pbook.SSHKey // use playbook's ssh_key
+//	}
+//	if p, err := expandPath(sshKey); err == nil {
+//		sshKey = p
+//	}
+//
+//	if sshKey == "" { // no key provided in cli or playbook
+//		u, err := userProvider.Current()
+//		if err != nil {
+//			return "", fmt.Errorf("can't get current user: %w", err)
+//		}
+//		if !sshAgent {
+//			sshKey = filepath.Join(u.HomeDir, ".ssh", "id_rsa")
+//		}
+//	}
+//
+//	log.Printf("[INFO] ssh key: %s", sshKey)
+//	return sshKey, nil
+//}
 
 // get ssh user from cli or playbook. if no user is provided, use current user from os
 func sshUser(sshUser string, pbook *config.PlayBook) (string, error) {

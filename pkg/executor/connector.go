@@ -15,25 +15,34 @@ import (
 
 // Connector provides factory methods to create Remote executor. Each executor is connected to a single SSH hostAddr.
 type Connector struct {
-	privateKey            string
+	sshKey                string
+	sshPwd                string
 	timeout               time.Duration
 	enableAgent           bool
 	enableAgentForwarding bool
 	logs                  Logs
 }
 
-// NewConnector creates a new Connector for a given user and private key.
-func NewConnector(privateKey string, timeout time.Duration, logs Logs) (res *Connector, err error) {
-	res = &Connector{privateKey: privateKey, timeout: timeout, logs: logs}
-	if privateKey == "" {
+// NewConnector creates a new Connector for a given user and ssh key or ssh pwd.
+func NewConnector(sshKey, sshPwd string, timeout time.Duration, logs Logs) (res *Connector, err error) {
+	res = &Connector{sshKey: sshKey, sshPwd: sshPwd, timeout: timeout, logs: logs}
+
+	if sshKey == "" && sshPwd == "" {
 		res.enableAgent = true
-		log.Printf("[DEBUG] no private key provided, use ssh agent only")
+		log.Printf("[DEBUG] no ssh key provided, use ssh agent only")
 		return res, nil
 	}
-	log.Printf("[DEBUG] use private key %q", privateKey)
-	if _, err := os.Stat(privateKey); os.IsNotExist(err) {
-		return nil, fmt.Errorf("private key file %q does not exist", privateKey)
+
+	if sshPwd == "" {
+		log.Printf("[DEBUG] use ssh key %q", sshKey)
+
+		if _, err := os.Stat(sshKey); os.IsNotExist(err) {
+			return nil, fmt.Errorf("ssh key file %q does not exist", sshKey)
+		}
+	} else {
+		log.Printf("[DEBUG] use ssh pwd %s", res.convertSSHPwd())
 	}
+
 	return res, nil
 }
 
@@ -94,14 +103,13 @@ func (c *Connector) sshClient(ctx context.Context, host, user string) (session *
 	if !strings.Contains(host, ":") {
 		host += ":22"
 	}
-
 	dialer := net.Dialer{Timeout: c.timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial: %w", err)
 	}
 
-	conf, err := c.sshConfig(user, c.privateKey)
+	conf, err := c.sshConfig(user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ssh config: %w", err)
 	}
@@ -119,30 +127,35 @@ func (c *Connector) sshClient(ctx context.Context, host, user string) (session *
 	return client, nil
 }
 
-func (c *Connector) sshConfig(user, privateKeyPath string) (*ssh.ClientConfig, error) {
-
+func (c *Connector) sshConfig(user string) (*ssh.ClientConfig, error) {
 	// getAuth returns a list of ssh.AuthMethod to be used for authentication.
 	// if ssh agent is enabled, it will be used, otherwise private key will be used.
 	getAuth := func() (auth []ssh.AuthMethod, err error) {
-		if privateKeyPath == "" || c.enableAgent {
-			if aconn, e := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); e == nil {
-				auth = append(auth, ssh.PublicKeysCallback(agent.NewClient(aconn).Signers))
-				log.Printf("[DEBUG] ssh agent found at %s", os.Getenv("SSH_AUTH_SOCK"))
-			} else {
-				return nil, fmt.Errorf("unable to connect to ssh agent: %w", e)
+		if c.sshPwd == "" {
+			if c.sshKey == "" || c.enableAgent {
+				if aconn, e := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); e == nil {
+					auth = append(auth, ssh.PublicKeysCallback(agent.NewClient(aconn).Signers))
+					log.Printf("[DEBUG] ssh agent found at %s", os.Getenv("SSH_AUTH_SOCK"))
+				} else {
+					return nil, fmt.Errorf("unable to connect to ssh agent: %w", e)
+				}
+				return auth, nil
 			}
+
+			key, err := os.ReadFile(c.sshKey) // nolint
+			if err != nil {
+				return nil, fmt.Errorf("unable to read private key: %vw", err)
+			}
+			signer, err := ssh.ParsePrivateKey(key)
+			if err != nil {
+				return nil, fmt.Errorf("unable to parse private key: %w", err)
+			}
+
+			auth = append(auth, ssh.PublicKeys(signer))
 			return auth, nil
 		}
 
-		key, err := os.ReadFile(privateKeyPath) // nolint
-		if err != nil {
-			return nil, fmt.Errorf("unable to read private key: %vw", err)
-		}
-		signer, err := ssh.ParsePrivateKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("unable to parse private key: %w", err)
-		}
-		auth = append(auth, ssh.PublicKeys(signer))
+		auth = append(auth, ssh.Password(c.sshPwd))
 		return auth, nil
 	}
 
@@ -160,6 +173,57 @@ func (c *Connector) sshConfig(user, privateKeyPath string) (*ssh.ClientConfig, e
 	return sshConfig, nil
 }
 
+//func (c *Connector) sshConfig(user, sshKey, sshPwd string) (*ssh.ClientConfig, error) {
+//
+//	// getAuth returns a list of ssh.AuthMethod to be used for authentication.
+//	// if ssh agent is enabled, it will be used, otherwise private key will be used.
+//	getAuth := func() (auth []ssh.AuthMethod, err error) {
+//		if sshKey == "" || c.enableAgent {
+//			if aconn, e := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); e == nil {
+//				auth = append(auth, ssh.PublicKeysCallback(agent.NewClient(aconn).Signers))
+//				log.Printf("[DEBUG] ssh agent found at %s", os.Getenv("SSH_AUTH_SOCK"))
+//			} else {
+//				return nil, fmt.Errorf("unable to connect to ssh agent: %w", e)
+//			}
+//			return auth, nil
+//		}
+//
+//		key, err := os.ReadFile(sshKey) // nolint
+//		if err != nil {
+//			return nil, fmt.Errorf("unable to read private key: %vw", err)
+//		}
+//		signer, err := ssh.ParsePrivateKey(key)
+//		if err != nil {
+//			return nil, fmt.Errorf("unable to parse private key: %w", err)
+//		}
+//		auth = append(auth, ssh.PublicKeys(signer))
+//		return auth, nil
+//	}
+//
+//	auth, err := getAuth()
+//	if err != nil {
+//		return nil, fmt.Errorf("failed to get ssh auth: %w", err)
+//	}
+//
+//	sshConfig := &ssh.ClientConfig{
+//		User:            user,
+//		Auth:            auth,
+//		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // nolint
+//	}
+//
+//	return sshConfig, nil
+//}
+
+func (c *Connector) convertSSHPwd() string {
+	var asterisks string
+
+	for range c.sshPwd {
+		asterisks += "*"
+	}
+
+	return asterisks
+}
+
 func (c *Connector) String() string {
-	return fmt.Sprintf("ssh connector with private key %s.., timeout %v, agent %v", c.privateKey[:8], c.timeout, c.enableAgent)
+	return fmt.Sprintf("ssh connector with ssh key %s.. and ssh pwd %s, timeout %v, agent %v", c.sshKey[:8], c.convertSSHPwd(), c.timeout, c.enableAgent)
 }
